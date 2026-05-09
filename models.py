@@ -1,4 +1,3 @@
-# models.py
 from pydantic import BaseModel
 from typing import List
 
@@ -16,6 +15,7 @@ class Rectangle(BaseModel):
 
 class SolveRequest(BaseModel):
     board: Board
+    solver_type: str = "cp"
 
 
 class ValidateRequest(BaseModel):
@@ -23,7 +23,11 @@ class ValidateRequest(BaseModel):
     rectangles: List[Rectangle]
     
 
-# --- Auth (nuevo) ---
+class HintRequest(BaseModel):
+    board: Board
+    user_rectangles: List[Rectangle] = []
+
+
 class LoginRequest(BaseModel):
     username: str
     password: str
