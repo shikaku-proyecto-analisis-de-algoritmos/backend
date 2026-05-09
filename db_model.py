@@ -1,4 +1,4 @@
-# models.py
+           
 from sqlalchemy import Column, Integer, String, DateTime
 from database import Base
 
@@ -6,7 +6,7 @@ class Player(Base):
     __tablename__ = "players"
     id       = Column(Integer, primary_key=True)
     username = Column(String, unique=True)
-    password = Column(String)  # hashear con bcrypt
+    password = Column(String)                      
     score    = Column(Integer, default=0)
 
 class GameRecord(Base):

@@ -1,4 +1,4 @@
-# auth.py - login con JWT
+                         
 from fastapi import APIRouter, Depends, HTTPException
 from passlib.hash import bcrypt
 import jwt
@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from database import SessionLocal
 from db_model import Player
 
-SECRET_KEY = "your-secret-key"  # Cambia esto por una clave segura en producción
+SECRET_KEY = "your-secret-key"                                                  
 
 router = APIRouter()
 
