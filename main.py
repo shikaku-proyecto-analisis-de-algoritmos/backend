@@ -5,8 +5,15 @@ from boards import get_board
 from auth import router as auth_router
 from solver import solve_backtracking, solve_backtracking_cp
 from hints import get_hint
+from database import engine, Base  
+import models as db_models 
 
 app = FastAPI()
+
+@app.on_event("startup") 
+
+def startup():
+    Base.metadata.create_all(bind=engine)
 
 app.add_middleware(
     CORSMiddleware,
