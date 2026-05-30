@@ -5,6 +5,7 @@ from boards import get_board
 from auth import router as auth_router
 from solver import solve_backtracking, solve_backtracking_cp
 from hints import get_hint
+from checker import check_solution
 from database import engine, Base  
 import models as db_models 
 
@@ -45,11 +46,12 @@ def solve(request: SolveRequest):
 
 @app.post("/validate")
 def validate(request: ValidateRequest):
-    return { "valid": False }
+    return check_solution(request.board, request.rectangles)
 
 
 @app.post("/hint")
 def hint(request: HintRequest):
+    
     result = get_hint(
         board=request.board.dict(),
         user_rectangles=[r.dict() for r in request.user_rectangles]
