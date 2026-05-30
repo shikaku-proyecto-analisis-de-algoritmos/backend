@@ -29,6 +29,11 @@ def fetch_board(difficulty: str = "easy", seed: int = None):
     board = get_board(difficulty=difficulty, seed=seed)
     return {"board": board}
 
+@app.get("/game/level/{id}")
+def fetch_game_level(id: int):
+    board = get_board(difficulty="medium", seed=id)
+    return board
+
 @app.post("/solve")
 def solve(request: SolveRequest):
     board_dict = request.board.dict()
