@@ -16,19 +16,3 @@ def get_board(difficulty: str = "easy", seed: int = None) -> dict:
         max_clues=config["max_clues"]
     )
     return board
-
-
-                                                    
-boards = {
-    "easy": {
-        "rows": 5,
-        "cols": 5,
-        "cells": [
-            [0, 0, 2, 0, 7],
-            [0, 0, 0, 0, 3],
-            [4, 0, 0, 0, 0],
-            [0, 0, 0, 2, 0],
-            [0, 0, 4, 0, 0],
-        ]
-    }
-}

@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from models import Board, SolveRequest, ValidateRequest, HintRequest
 from boards import get_board
@@ -40,8 +40,10 @@ def solve(request: SolveRequest):
     board_dict = request.board.dict()
     if request.solver_type == "bt":
         solution = solve_backtracking(board_dict)
-    else:
+    elif request.solver_type == "cp":
         solution = solve_backtracking_cp(board_dict)
+    else:
+        raise HTTPException(status_code=400, detail="solver_type must be 'bt' or 'cp'")
     return {"solution": solution}
 
 @app.post("/validate")
