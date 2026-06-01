@@ -4,3 +4,4 @@ sqlalchemy
 pydantic
 PyJWT
 passlib[bcrypt]
+google-auth

@@ -50,6 +50,10 @@ class LoginRequest(BaseModel):
 class RegisterRequest(BaseModel):
     username: str
     password: str
+    email: Optional[str] = None
+
+class GoogleAuthRequest(BaseModel):
+    credential: str
 
 class TokenResponse(BaseModel):
     access_token: str

@@ -7,7 +7,11 @@ class Player(Base):
     __tablename__ = "players"
     id       = Column(Integer, primary_key=True)
     username = Column(String, unique=True)
-    password = Column(String)                      
+    password = Column(String, nullable=True)
+    email = Column(String, unique=True, nullable=True, index=True)
+    google_id = Column(String, unique=True, nullable=True, index=True)
+    auth_provider = Column(String, default="local")
+    avatar_url = Column(String, nullable=True)
     score    = Column(Integer, default=0)
 
 class PlayerProfile(Base):

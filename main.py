@@ -1,6 +1,7 @@
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 from statistics import median
+from sqlalchemy import text
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -16,10 +17,28 @@ from db_model import GameRecord, GameSession, HintEvent, LoginEvent, Player, Pla
 
 app = FastAPI()
 
+def _ensure_player_columns():
+    with engine.begin() as connection:
+        existing_columns = {
+            row[1] for row in connection.execute(text("PRAGMA table_info(players)")).fetchall()
+        }
+        if "email" not in existing_columns:
+            connection.execute(text("ALTER TABLE players ADD COLUMN email VARCHAR"))
+            connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_players_email ON players(email)"))
+        if "google_id" not in existing_columns:
+            connection.execute(text("ALTER TABLE players ADD COLUMN google_id VARCHAR"))
+            connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_players_google_id ON players(google_id)"))
+        if "auth_provider" not in existing_columns:
+            connection.execute(text("ALTER TABLE players ADD COLUMN auth_provider VARCHAR DEFAULT 'local'"))
+            connection.execute(text("UPDATE players SET auth_provider = 'local' WHERE auth_provider IS NULL"))
+        if "avatar_url" not in existing_columns:
+            connection.execute(text("ALTER TABLE players ADD COLUMN avatar_url VARCHAR"))
+
 @app.on_event("startup") 
 
 def startup():
     Base.metadata.create_all(bind=engine)
+    _ensure_player_columns()
 
 app.add_middleware(
     CORSMiddleware,
@@ -192,6 +211,9 @@ def profile(
     return {
         "id": player.id,
         "username": player.username,
+        "email": player.email,
+        "authProvider": player.auth_provider or "local",
+        "avatarUrl": player.avatar_url,
         "registeredAt": profile_row.created_at,
         "score": player.score or 0,
         "levelsCompleted": len(completed),
