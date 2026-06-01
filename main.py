@@ -1,13 +1,18 @@
-from fastapi import FastAPI, HTTPException
+from collections import Counter, defaultdict
+from datetime import date, datetime, timedelta
+from statistics import median
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from models import Board, SolveRequest, ValidateRequest, HintRequest
+from sqlalchemy.orm import Session
+from models import Board, SessionStartRequest, SolveRequest, ValidateRequest, HintRequest
 from boards import get_board
-from auth import router as auth_router
+from auth import ensure_profile, get_current_player, get_db, get_optional_player, router as auth_router
 from solver import solve_backtracking, solve_backtracking_cp
 from hints import get_hint
 from checker import check_solution
 from database import engine, Base  
 import models as db_models 
+from db_model import GameRecord, GameSession, HintEvent, LoginEvent, Player, PlayerProfile, SolveEvent
 
 app = FastAPI()
 
@@ -36,7 +41,11 @@ def fetch_game_level(id: int):
     return board
 
 @app.post("/solve")
-def solve(request: SolveRequest):
+def solve(
+    request: SolveRequest,
+    player: Player = Depends(get_optional_player),
+    db: Session = Depends(get_db)
+):
     board_dict = request.board.dict()
     if request.solver_type == "bt":
         solution = solve_backtracking(board_dict)
@@ -44,18 +53,244 @@ def solve(request: SolveRequest):
         solution = solve_backtracking_cp(board_dict)
     else:
         raise HTTPException(status_code=400, detail="solver_type must be 'bt' or 'cp'")
+
+    if player:
+        db.add(SolveEvent(
+            player_id=player.id,
+            difficulty=request.difficulty or "unknown",
+            level=request.level or 1,
+            solver_type=request.solver_type,
+            elapsed_before_secs=request.elapsed_secs or 0
+        ))
+        db.commit()
+
     return {"solution": solution}
 
 @app.post("/validate")
-def validate(request: ValidateRequest):
-    return check_solution(request.board, request.rectangles)
+def validate(
+    request: ValidateRequest,
+    player: Player = Depends(get_optional_player),
+    db: Session = Depends(get_db)
+):
+    result = check_solution(request.board, request.rectangles)
+    if player and result.get("valid"):
+        completed_at = datetime.utcnow()
+        time_secs = request.time_secs or 0
+        difficulty = request.difficulty or "unknown"
+        solve_used = bool(request.solve_used)
+
+        db.add(GameSession(
+            player_id=player.id,
+            difficulty=difficulty,
+            level=request.level or 1,
+            completed_at=completed_at,
+            completed=True,
+            manual=not solve_used,
+            time_secs=time_secs,
+            hints_used=request.hints_used or 0,
+            solve_used=solve_used
+        ))
+        db.add(GameRecord(
+            player_id=player.id,
+            difficulty=difficulty,
+            time_secs=time_secs,
+            completed=completed_at
+        ))
+        player.score = (player.score or 0) + 100
+        db.commit()
+    return result
 
 
 @app.post("/hint")
-def hint(request: HintRequest):
+def hint(
+    request: HintRequest,
+    player: Player = Depends(get_optional_player),
+    db: Session = Depends(get_db)
+):
     
     result = get_hint(
         board=request.board.dict(),
         user_rectangles=[r.dict() for r in request.user_rectangles]
     )
+
+    if player:
+        db.add(HintEvent(
+            player_id=player.id,
+            difficulty=request.difficulty or "unknown",
+            level=request.level or 1,
+            elapsed_secs=request.elapsed_secs or 0
+        ))
+        db.commit()
+
     return result
+
+@app.post("/analytics/session/start")
+def start_session(
+    request: SessionStartRequest,
+    player: Player = Depends(get_current_player),
+    db: Session = Depends(get_db)
+):
+    db.add(GameSession(
+        player_id=player.id,
+        difficulty=request.difficulty,
+        level=request.level,
+        completed=False,
+        manual=True,
+        time_secs=0
+    ))
+    db.commit()
+    return {"message": "session recorded"}
+
+def _format_duration(seconds: int) -> str:
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    secs = seconds % 60
+    if hours:
+        return f"{hours}h {minutes}m {secs}s"
+    return f"{minutes}m {secs}s"
+
+def _streaks(login_events):
+    login_days = sorted({event.logged_at.date() for event in login_events}, reverse=True)
+    if not login_days:
+        return {"current": 0, "max": 0}
+
+    today = date.today()
+    current = 0
+    cursor = today
+    days = set(login_days)
+    if today not in days and (today - timedelta(days=1)) in days:
+        cursor = today - timedelta(days=1)
+    while cursor in days:
+        current += 1
+        cursor -= timedelta(days=1)
+
+    max_streak = 1
+    running = 1
+    asc = sorted(days)
+    for idx in range(1, len(asc)):
+        if asc[idx] == asc[idx - 1] + timedelta(days=1):
+            running += 1
+            max_streak = max(max_streak, running)
+        else:
+            running = 1
+
+    return {"current": current, "max": max_streak}
+
+@app.get("/profile")
+def profile(
+    player: Player = Depends(get_current_player),
+    db: Session = Depends(get_db)
+):
+    profile_row = ensure_profile(player, db)
+    logins = db.query(LoginEvent).filter(LoginEvent.player_id == player.id).order_by(LoginEvent.logged_at.desc()).all()
+    completed = db.query(GameSession).filter(
+        GameSession.player_id == player.id,
+        GameSession.completed == True
+    ).all()
+    total_time = sum(session.time_secs or 0 for session in completed)
+
+    return {
+        "id": player.id,
+        "username": player.username,
+        "registeredAt": profile_row.created_at,
+        "score": player.score or 0,
+        "levelsCompleted": len(completed),
+        "totalPlayedSecs": total_time,
+        "totalPlayedLabel": _format_duration(total_time),
+        "lastAccess": logins[0].logged_at if logins else None
+    }
+
+@app.get("/profile/stats")
+def profile_stats(
+    player: Player = Depends(get_current_player),
+    db: Session = Depends(get_db)
+):
+    completed = db.query(GameSession).filter(
+        GameSession.player_id == player.id,
+        GameSession.completed == True
+    ).all()
+    solves = db.query(SolveEvent).filter(SolveEvent.player_id == player.id).all()
+    hints = db.query(HintEvent).filter(HintEvent.player_id == player.id).all()
+    logins = db.query(LoginEvent).filter(LoginEvent.player_id == player.id).all()
+
+    levels_by_difficulty = Counter(session.difficulty for session in completed)
+    algorithms = Counter(event.solver_type for event in solves)
+    manual_sessions = [session for session in completed if session.manual]
+
+    manual_times = {}
+    for difficulty in ["easy", "medium", "hard"]:
+        values = [session.time_secs or 0 for session in manual_sessions if session.difficulty == difficulty]
+        manual_times[difficulty] = {
+            "average": round(sum(values) / len(values), 2) if values else 0,
+            "best": min(values) if values else 0,
+            "worst": max(values) if values else 0
+        }
+
+    solve_waits = [event.elapsed_before_secs or 0 for event in solves]
+    solve_wait_stats = {
+        "average": round(sum(solve_waits) / len(solve_waits), 2) if solve_waits else 0,
+        "median": median(solve_waits) if solve_waits else 0,
+        "min": min(solve_waits) if solve_waits else 0,
+        "max": max(solve_waits) if solve_waits else 0
+    }
+
+    hints_by_day = Counter(event.created_at.date().isoformat() for event in hints)
+    logins_by_day = Counter(event.logged_at.date().isoformat() for event in logins)
+    total_time = sum(session.time_secs or 0 for session in completed)
+    hint_frequency = {
+        "perGame": round(len(hints) / len(completed), 2) if completed else 0,
+        "secondsPerHint": round(total_time / len(hints), 2) if hints and total_time else 0
+    }
+    streaks = _streaks(logins)
+
+    return {
+        "kpis": {
+            "levelsCompleted": len(completed),
+            "totalPlayedSecs": total_time,
+            "totalPlayedLabel": _format_duration(total_time),
+            "currentStreak": streaks["current"],
+            "maxStreak": streaks["max"],
+            "hintsUsed": len(hints),
+            "loginCount": len(logins),
+            "solveCount": len(solves)
+        },
+        "levelsByDifficulty": {
+            "easy": levels_by_difficulty.get("easy", 0),
+            "medium": levels_by_difficulty.get("medium", 0),
+            "hard": levels_by_difficulty.get("hard", 0)
+        },
+        "algorithmUsage": {
+            "bt": algorithms.get("bt", 0),
+            "cp": algorithms.get("cp", 0)
+        },
+        "manualTimesByDifficulty": manual_times,
+        "solveWaitStats": solve_wait_stats,
+        "hintFrequency": hint_frequency,
+        "hintsByDay": dict(sorted(hints_by_day.items())),
+        "activityByDay": dict(sorted(logins_by_day.items()))
+    }
+
+@app.get("/profile/history")
+def profile_history(
+    player: Player = Depends(get_current_player),
+    db: Session = Depends(get_db)
+):
+    completed = db.query(GameSession).filter(
+        GameSession.player_id == player.id,
+        GameSession.completed == True
+    ).order_by(GameSession.completed_at.desc()).limit(25).all()
+
+    return {
+        "games": [
+            {
+                "difficulty": session.difficulty,
+                "level": session.level,
+                "timeSecs": session.time_secs,
+                "manual": session.manual,
+                "hintsUsed": session.hints_used,
+                "solveUsed": session.solve_used,
+                "completedAt": session.completed_at
+            }
+            for session in completed
+        ]
+    }
