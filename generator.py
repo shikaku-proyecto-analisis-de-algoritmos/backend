@@ -7,7 +7,8 @@ def generate_board(
     seed: Optional[int] = None,
     min_clues: Optional[int] = None,
     max_clues: Optional[int] = None,
-    max_retries: int = 100
+    max_retries: int = 100,
+    difficulty: str = "medium"
 ) -> Dict:
        
     if min_clues is None:
@@ -16,27 +17,36 @@ def generate_board(
         max_clues = n * n // 2
 
     for attempt in range(max_retries):
-        board, _ = generate_board_with_solution(n, seed, min_clues, max_clues)
+        board, _ = generate_board_with_solution(n, seed, min_clues, max_clues, difficulty)
         if board is not None:
             return board
-
-                                                 
-    board, _ = generate_board_with_solution(n, seed)
-    return board
-
+                                      
 
 def generate_board_with_solution(
     n: int,
     seed: Optional[int] = None,
     min_clues: Optional[int] = None,
-    max_clues: Optional[int] = None
-) -> Tuple[Optional[Dict], List[Dict]]:    
+    max_clues: Optional[int] = None,
+    difficulty: str = "medium"
+) -> Tuple[Optional[Dict], List[Dict]]:   
     if min_clues is None:
         min_clues = n * n // 4
     if max_clues is None:
         max_clues = n * n // 2
 
     rng = random.Random(seed)
+
+    # Área mínima según dificultad
+    if difficulty == "easy":
+        min_area = 1
+    elif difficulty == "medium":
+        min_area = 2
+    elif difficulty == "hard":
+        min_area = 3
+    elif difficulty == "expert":
+        min_area = 4
+    else:
+        min_area = 2
 
                                                            
     assignment = [[None for _ in range(n)] for _ in range(n)]
@@ -63,16 +73,27 @@ def generate_board_with_solution(
 
                                                                   
         max_area = min(n * n // 2, 9)
-        valid_rects = [r for r in valid_rects if r["area"] <= max_area]
 
+        valid_rects = [
+            r for r in valid_rects
+            if min_area <= r["area"] <= max_area
+        ]
+
+        # Si el filtro fue demasiado restrictivo
         if not valid_rects:
-            raise RuntimeError(
-                f"No valid rectangles after area filtering at ({sr}, {sc}). "
-                "Decrease max_area or adjust clue constraints."
+            valid_rects = _enumerate_valid_rectangles(
+                assignment, n, sr, sc
             )
 
-                                       
-        chosen = rng.choice(valid_rects)
+            valid_rects = [
+                r for r in valid_rects
+                if r["area"] <= max_area
+            ]
+
+        # Favorecer rectángulos grandes
+        weights = [r["area"] ** 2 for r in valid_rects]
+        chosen = rng.choices(valid_rects, weights=weights, k=1)[0]
+
         r1, c1, r2, c2 = (
             chosen["r1"],
             chosen["c1"],
