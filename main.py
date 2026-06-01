@@ -49,6 +49,23 @@ app.add_middleware(
 
 app.include_router(auth_router)
 
+@app.get("/leaderboard")
+def get_leaderboard(db: Session = Depends(get_db)):
+    players = (
+        db.query(Player)
+        .order_by(Player.score.desc(), Player.username.asc())
+        .limit(10)
+        .all()
+    )
+    return [
+        {
+            "rank": index + 1,
+            "username": player.username,
+            "score": player.score or 0
+        }
+        for index, player in enumerate(players)
+    ]
+
 @app.get("/board")
 def fetch_board(difficulty: str = "easy", seed: int = None):
     board = get_board(difficulty=difficulty, seed=seed)
@@ -85,6 +102,7 @@ def solve(
 
     return {"solution": solution}
 
+
 @app.post("/validate")
 def validate(
     request: ValidateRequest,
@@ -92,11 +110,13 @@ def validate(
     db: Session = Depends(get_db)
 ):
     result = check_solution(request.board, request.rectangles)
+
     if player and result.get("valid"):
         completed_at = datetime.utcnow()
         time_secs = request.time_secs or 0
-        difficulty = request.difficulty or "unknown"
+        difficulty = (request.difficulty or "easy").lower()
         solve_used = bool(request.solve_used)
+        hints_used = request.hints_used or 0
 
         db.add(GameSession(
             player_id=player.id,
@@ -106,17 +126,80 @@ def validate(
             completed=True,
             manual=not solve_used,
             time_secs=time_secs,
-            hints_used=request.hints_used or 0,
+            hints_used=hints_used,
             solve_used=solve_used
         ))
+
         db.add(GameRecord(
             player_id=player.id,
             difficulty=difficulty,
             time_secs=time_secs,
             completed=completed_at
         ))
-        player.score = (player.score or 0) + 100
+
+        # ==================================================
+        # CÁLCULO DE PUNTAJE
+        # ==================================================
+
+        # Puntos base por dificultad
+        difficulty_points = {
+            "easy": 100,
+            "medium": 250,
+            "hard": 500
+        }
+
+        score_earned = difficulty_points.get(difficulty, 100)
+
+        # --------------------------------------------------
+        # BONUS POR RESOLUCIÓN MANUAL
+        # --------------------------------------------------
+
+        if not solve_used:
+            score_earned = int(score_earned * 1.5)
+
+        # --------------------------------------------------
+        # BONUS POR VELOCIDAD
+        # --------------------------------------------------
+
+        # (tiempo objetivo en segundos, bonus máximo)
+        time_targets = {
+            "easy": (60, 150),
+            "medium": (180, 300),
+            "hard": (300, 500)
+        }
+
+        target_time, max_bonus = time_targets.get(
+            difficulty,
+            (60, 150)
+        )
+
+        if time_secs > 0:
+            speed_bonus = int(
+                max_bonus *
+                (target_time / (target_time + time_secs))
+            )
+
+            score_earned += speed_bonus
+
+        # --------------------------------------------------
+        # PENALIZACIÓN POR PISTAS
+        # --------------------------------------------------
+
+        score_earned -= hints_used * 20
+
+        # --------------------------------------------------
+        # PUNTAJE MÍNIMO GARANTIZADO
+        # --------------------------------------------------
+
+        score_earned = max(score_earned, 50)
+
+        player.score = (player.score or 0) + score_earned
+
         db.commit()
+
+        result["score_earned"] = score_earned
+        result["total_score"] = player.score
+
     return result
 
 
